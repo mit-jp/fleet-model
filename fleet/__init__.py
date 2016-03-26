@@ -50,7 +50,7 @@ class Model(xr.Dataset):
     Inherits xray.Dataset, so that the data (variables, coords, attrs)
     associated with the model may be accessed directly from instances.
     """
-    def __init__(self):
+    def __init__(self, init_data):
         # Data arrays store vehicles classes *plus* categories
         class_tree = {'Total': default.classes}
         # atomic = list(leaves(class_tree))
@@ -86,15 +86,22 @@ class Model(xr.Dataset):
         # Other attributes that could not be precomputed
         self.attrs['t+'] = self.t.where(self.t >= self.attrs['t0']).dropna('t')
 
+        # Initialize data
+        init_data(self)
+
     def compute(self, var):
+        """Compute the contents of *var*."""
         if var == 'sales_ratio':
             self._sales_ratio()
         elif var == 'sales':
             self._sales()
         elif var == 'stock':
             self._stock()
+        else:
+            raise ValueError(var)
 
     def _sales_ratio(self):
+        """Compute sales_ratio."""
         tp = self.attrs['t+']
         x = self['sales_growth'].sel(t=tp)
         axis = x.get_axis_num('t')
@@ -102,7 +109,7 @@ class Model(xr.Dataset):
         self['sales_ratio'].loc[:, tp] = x.T
 
     def _sales(self):
-        """Project future vehicle sales."""
+        """Compute sales."""
         tp = self.attrs['t+']
         # Product of sales in the year before y_0 and the ratio of future
         # years' sales
@@ -184,7 +191,7 @@ class Model(xr.Dataset):
     def new(self, name, dims):
         self[name] = (dims, np.nan * np.ones([len(self[d]) for d in dims]))
 
-    def fill(self, var, dim, dir=1, stop=None):
+    def fill(self, var, dim, reverse=False, stop=None):
         """Fill the variable *var* along dimension *dim*."""
         x = self[var].values
         axis = self[var].get_axis_num(dim)
@@ -192,7 +199,7 @@ class Model(xr.Dataset):
             stop = self.attrs['t0']
         fill_values = x.take(0, axis)
         it = enumerate(self[dim])
-        if dir == -1:
+        if reverse:
             it = reversed(list(it))
         for i, k in it:
             if k == stop:
@@ -203,3 +210,9 @@ class Model(xr.Dataset):
             idx1 = idx0.copy()
             idx0.insert(axis, [i])
             x[np.ix_(*idx0)] = fill_values[np.ix_(*idx1)]
+
+    def ffill(self, var, dim, stop=None):
+        self.fill(var, dim, stop)
+
+    def bfill(self, var, dim, stop=None):
+        self.fill(var, dim, reverse=True, stop=stop)
