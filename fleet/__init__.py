@@ -64,6 +64,11 @@ class Model(xr.Dataset):
             'powertrain': default.powertrains,
             'fuel': default.fuels,
             }
+        coords['tm'] = ('t', coords['t'])
+
+        # Save the length of dimensions, for initialization
+        N = {k: len(v) for k, v in coords.items()}
+        N['tm'] = N['t']
 
         # Variables
         variables = {}
@@ -71,8 +76,7 @@ class Model(xr.Dataset):
                         vars(fleet.variables)):
             attrs = getattr(fleet.variables, v)
             dims = attrs.pop('dims')
-            variables[v] = (dims,
-                            np.nan * np.ones([len(coords[d]) for d in dims]),
+            variables[v] = (dims, np.nan * np.ones([N[d] for d in dims]),
                             attrs)
 
         # Attributes
@@ -122,20 +126,25 @@ class Model(xr.Dataset):
     def _stock(self):
         """Project vehicle stocks using a survival function."""
         # Vector of vehicle ages
-        age = np.arange(1, 100)
+        age = np.arange(1, self.t[-1] - self.t[0] + 2)
         # Survival function parameters
         B = self['B'].values
         T = self['T'].values
         # Survival function
         s = xr.DataArray(np.exp(-((age[:, np.newaxis] / T) ** B)).T,
-                         dims=('class', 'year'),
-                         coords=(self.coords['class'], age))
-        # Copy sales into stock variable and compute survival in same step
-        Ny = len(self.t)
-        for i in range(Ny):
-            y = str(self.attrs['y_min'] + i)
-            self['stock'].loc[:, y:, y] = np.expand_dims(np.floor(
-                s[:, :(Ny-i)] * self['sales'].loc[:, y].values), axis=2)
+                         dims=['class', 'age'],
+                         coords={'class': self['class'], 'age': age})
+        s = np.exp(-((age[:, np.newaxis] / T) ** B)).T
+        # Copy sales into stock variable
+        for t in self.t.values:
+            tp = self.t.where(self.t >= t).dropna('t')
+            stock_t = self['sales'].sel(t=t).values[:, np.newaxis] * s
+            self['stock'].loc[:, t, tp] = np.floor(stock_t[:, :len(tp)])
+        return  # Refactor complete to here
+        # Compute survival
+        for t in self['t']:
+            self['stock'].loc[:, t:, t] = np.expand_dims(np.floor(
+                self['sales'].sel(t=t).values * s), axis=2)
         # Compute subtotals by class category Ɐ {model_year, cal_year}
         for cat in self.attrs['categories'].keys():
             self.aggregate('stock', cat)

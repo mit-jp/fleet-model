@@ -32,7 +32,7 @@ T = {
     }
 
 stock = {
-    'dims': ['class', 't', 't'],
+    'dims': ['class', 'tm', 't'],
     'description': 'Surviving stock of t₁ vehicles at time t₂',
     'units': 'vehicle',
     }

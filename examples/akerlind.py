@@ -1,5 +1,3 @@
-import sys
-
 from fleet import Model
 
 
@@ -46,22 +44,23 @@ def akerlind_data(m):
 # Initialize the model
 m = Model(akerlind_data)
 
-# Solve the model
-m.compute('sales_ratio')
+def solve():
+    """Solve the model."""
+    m.compute('sales_ratio')
 
-# Sales
-m.compute('sales')
-# Compute number of private, non-private cars, total vehicles
-m.disaggregate('sales', 'Car', 'pcar_frac')
-m.aggregate('sales', 'Total')
+    # Sales
+    m.compute('sales')
+    # Compute number of private, non-private cars, total vehicles
+    m.disaggregate('sales', 'Car', 'pcar_frac')
+    m.aggregate('sales', 'Total')
 
-sys.exit(0)  # Refactor complete to here
+    m.compute('stock')
 
-m.compute('stock')
+solve()
 
 # Output, for comparison to the original model
-o = m['stock'].loc['Private car', :, :].to_dataframe().unstack('model_year')
-o.to_csv('pcar.csv')
+A = m['stock'].sel(**{'class': 'Private car'}).to_dataframe() \
+              .drop('class', axis=1).unstack('tm')
 
 # TODO add data from Stock!G49:J58
 # TODO add data from Stock!G143:J153
