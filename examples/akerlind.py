@@ -36,13 +36,16 @@ def akerlind_data(m):
     m.bfill('pcar_frac', 't')
 
     # Survival rate parameters for private car, non-private car, light truck
-    c = {'class': ['Private car', 'Non-private car', 'Light truck']}
-    m['B'] = DataArray([4.7, 5.33, 5.58], coords=c)
-    m['T'] = DataArray([14.46, 13.11, 8.02], coords=c)
+    c = ['Private car', 'Non-private car', 'Light truck']
+    m['B'].loc[c] = [4.7, 5.33, 5.58]
+    m['T'].loc[c] = [14.46, 13.11, 8.02]
 
+    m['vdt_v'].loc[c, '2000', 0] = [22540, 25760, 28980]
+    m['vdt_v_rate'].loc[c] = [4, 4, 4]
 
 # Initialize the model
 m = Model(akerlind_data)
+
 
 def solve():
     """Solve the model."""
@@ -55,6 +58,7 @@ def solve():
     m.aggregate('sales', 'Total')
 
     m.compute('stock')
+    m.compute('vdt_v')
 
 solve()
 

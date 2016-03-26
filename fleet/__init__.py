@@ -60,15 +60,13 @@ class Model(xr.Dataset):
         coords = {
             't': pd.period_range(default.time['min'], default.time['max'],
                                  freq=default.time['freq']),
+            'tm': pd.period_range(default.time['min'], default.time['max'],
+                                  freq=default.time['freq']),
             'class': classes,
             'powertrain': default.powertrains,
             'fuel': default.fuels,
             }
-        coords['tm'] = ('t', coords['t'])
-
-        # Save the length of dimensions, for initialization
-        N = {k: len(v) for k, v in coords.items()}
-        N['tm'] = N['t']
+        coords['age'] = range(len(coords['t']) + 1)
 
         # Variables
         variables = {}
@@ -76,7 +74,8 @@ class Model(xr.Dataset):
                         vars(fleet.variables)):
             attrs = getattr(fleet.variables, v)
             dims = attrs.pop('dims')
-            variables[v] = (dims, np.nan * np.ones([N[d] for d in dims]),
+            variables[v] = (dims,
+                            np.nan * np.ones([len(coords[d]) for d in dims]),
                             attrs)
 
         # Attributes
@@ -95,14 +94,9 @@ class Model(xr.Dataset):
 
     def compute(self, var):
         """Compute the contents of *var*."""
-        if var == 'sales_ratio':
-            self._sales_ratio()
-        elif var == 'sales':
-            self._sales()
-        elif var == 'stock':
-            self._stock()
-        else:
+        if var not in ['sales', 'sales_ratio', 'stock', 'vdt_v']:
             raise ValueError(var)
+        getattr(self, '_' + var)()
 
     def _sales_ratio(self):
         """Compute sales_ratio."""
@@ -124,27 +118,20 @@ class Model(xr.Dataset):
         self['sales'] = a.fillna(0) + b.fillna(0)
 
     def _stock(self):
-        """Project vehicle stocks using a survival function."""
+        """Compute vehicle stocks."""
         # Vector of vehicle ages
-        age = np.arange(1, self.t[-1] - self.t[0] + 2)
         # Survival function parameters
+        age = self['age'].values[:, np.newaxis]
         B = self['B'].values
         T = self['T'].values
         # Survival function
-        s = xr.DataArray(np.exp(-((age[:, np.newaxis] / T) ** B)).T,
-                         dims=['class', 'age'],
-                         coords={'class': self['class'], 'age': age})
-        s = np.exp(-((age[:, np.newaxis] / T) ** B)).T
-        # Copy sales into stock variable
+        self['__s'] = (('age', 'class'), np.exp(-((age / T) ** B)))
+        # Copy sales into stock variable & compute survival
         for t in self.t.values:
             tp = self.t.where(self.t >= t).dropna('t')
-            stock_t = self['sales'].sel(t=t).values[:, np.newaxis] * s
+            stock_t = self['sales'].sel(t=t) * self['__s']
             self['stock'].loc[:, t, tp] = np.floor(stock_t[:, :len(tp)])
         return  # Refactor complete to here
-        # Compute survival
-        for t in self['t']:
-            self['stock'].loc[:, t:, t] = np.expand_dims(np.floor(
-                self['sales'].sel(t=t).values * s), axis=2)
         # Compute subtotals by class category Ɐ {model_year, cal_year}
         for cat in self.attrs['categories'].keys():
             self.aggregate('stock', cat)
@@ -161,6 +148,10 @@ class Model(xr.Dataset):
                 self['stock_total'].loc[cl, y_]
         # TODO compute removed vehicles
         # TODO compute removed as % of sales
+
+    def _vdt_v(self):
+        """Compute VDT per vehicle."""
+        pass
 
     def disaggregate(self, var, cat, shares):
         """Disaggregate data for a category.
