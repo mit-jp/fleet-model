@@ -3,17 +3,13 @@ import pandas as pd
 import xarray as xr
 
 import fleet.default as default
+import fleet.variables
 
 
 class MissingDataException(Exception):
     """Raised by FleetModel methods that find missing prerequisite data."""
     # TODO replace assertions below with this exception
     pass
-
-
-def nans(*size):
-    """Return an array of NaNs (for brevity)."""
-    return np.nan * np.ones(size)
 
 
 # Functions for querying the class tree
@@ -55,43 +51,39 @@ class Model(xr.Dataset):
     associated with the model may be accessed directly from instances.
     """
     def __init__(self):
-        # Range of years
-        t = pd.period_range(default.time['min'],
-                            default.time['max'],
-                            freq=default.time['freq'])
-        Nt = len(t)
-
         # Data arrays store vehicles classes *plus* categories
         class_tree = {'Total': default.classes}
         # atomic = list(leaves(class_tree))
         classes = list(nodes(class_tree))
-        Nc = len(classes)
 
-        # Initialize variables and coordinates
-        # TODO add description attributes & units for variables; see 'T':
-        xr.Dataset.__init__(self, {
-            'sales': (['class', 't'], nans(Nc, Nt)),
-            'sales_growth': (['class', 't'], nans(Nc, Nt)),
-            'sales_ratio': (['class', 't'], nans(Nc, Nt)),
-            'B': ('class', nans(Nc)),
-            'T': ('class', nans(Nc), {
-                'description': 'Rate parameter for vehicle survival function',
-                'units': 'years'
-                }),
-            'stock': (['class', 't', 't'], nans(Nc, Nt, Nt)),
-            'stock_total': (['class', 't'], nans(Nc, Nt)),
-            'age_mean': (['class', 't'], nans(Nc, Nt)),
-            },
-            coords={
-                'class': classes,
-                't': t,
-                'powertrain': default.powertrains,
-                'fuel': default.fuels,
-            })
-        # Store the initial attributes—must follow Dataset.__init__
-        self.attrs['class tree'] = class_tree
-        self.attrs['t0'] = pd.Period(default.time[0],
-                                     freq=default.time['freq'])
+        # Coordinates
+        coords = {
+            't': pd.period_range(default.time['min'], default.time['max'],
+                                 freq=default.time['freq']),
+            'class': classes,
+            'powertrain': default.powertrains,
+            'fuel': default.fuels,
+            }
+
+        # Variables
+        variables = {}
+        for v in filter(lambda x: not x.startswith('__'),
+                        vars(fleet.variables)):
+            attrs = getattr(fleet.variables, v)
+            dims = attrs.pop('dims')
+            variables[v] = (dims,
+                            np.nan * np.ones([len(coords[d]) for d in dims]),
+                            attrs)
+
+        # Attributes
+        attrs = {
+            'class tree': class_tree,
+            't0': pd.Period(default.time[0], freq=default.time['freq'])
+            }
+
+        xr.Dataset.__init__(self, variables, coords, attrs=attrs)
+
+        # Other attributes that could not be precomputed
         self.attrs['t+'] = self.t.where(self.t >= self.attrs['t0']).dropna('t')
 
     def compute(self, var):
@@ -190,7 +182,7 @@ class Model(xr.Dataset):
         return other
 
     def new(self, name, dims):
-        self[name] = (dims, nans(*[len(self[d]) for d in dims]))
+        self[name] = (dims, np.nan * np.ones([len(self[d]) for d in dims]))
 
     def fill(self, var, dim, dir=1, stop=None):
         """Fill the variable *var* along dimension *dim*."""
