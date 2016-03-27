@@ -1,13 +1,10 @@
-from collections import defaultdict
-
 # Default attributes for the fleet model
 
-
-# A tree data structure
-def tree(): return defaultdict(tree)
-
-# Vehicle classes
-classes = {
+# Vehicle types or categories
+#
+# These are defined as a tree using nested Python dict()s; any key with a
+# value of None is a leaf node of the tree, or an 'atomic' vehicle category.
+categories = {
     'Car': {
         'Private car': None,
         'Non-private car': None,

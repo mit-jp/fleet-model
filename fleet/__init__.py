@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from fleet.category import Category
 import fleet.default as default
 import fleet.variables
 
@@ -12,38 +13,6 @@ class MissingDataException(Exception):
     pass
 
 
-# Functions for querying the class tree
-def nodes(root):
-    if root is None:
-        return
-    for node, subtree in root.items():
-        yield node
-        for item in nodes(subtree):
-            yield item
-
-
-def leaves(root):
-    for node, subtree in root.items():
-        if subtree is None:
-            yield node
-        else:
-            for item in leaves(subtree):
-                yield item
-
-
-def tree_find(root, label):
-    """Return the subtree of *root* with *label* at its head."""
-    for node, subtree in root.items():
-        if node == label:
-            return subtree
-        elif subtree is not None:
-            return tree_find(subtree, label)
-
-
-def subcategories(root, label):
-    return list(tree_find(root, label).keys())
-
-
 class Model(xr.Dataset):
     """Fleet model class.
 
@@ -52,9 +21,9 @@ class Model(xr.Dataset):
     """
     def __init__(self, init_data):
         # Data arrays store vehicles classes *plus* categories
-        class_tree = {'Total': default.classes}
-        # atomic = list(leaves(class_tree))
-        classes = list(nodes(class_tree))
+        cat_tree = Category('Total', default.categories)
+        # atomic = cat_tree.leaves()
+        categories = cat_tree.nodes()
 
         # Coordinates
         coords = {
@@ -62,7 +31,7 @@ class Model(xr.Dataset):
                                  freq=default.time['freq']),
             'tm': pd.period_range(default.time['min'], default.time['max'],
                                   freq=default.time['freq']),
-            'class': classes,
+            'category': categories,
             'powertrain': default.powertrains,
             'fuel': default.fuels,
             }
@@ -80,8 +49,8 @@ class Model(xr.Dataset):
 
         # Attributes
         attrs = {
-            'class tree': class_tree,
-            't0': pd.Period(default.time[0], freq=default.time['freq'])
+            'cat tree': cat_tree,
+            't0': pd.Period(default.time[0], freq=default.time['freq']),
             }
 
         xr.Dataset.__init__(self, variables, coords, attrs=attrs)
@@ -97,6 +66,7 @@ class Model(xr.Dataset):
         if var not in ['sales', 'sales_ratio', 'stock', 'vdt_v']:
             raise ValueError(var)
         getattr(self, '_' + var)()
+        return self
 
     def _sales_ratio(self):
         """Compute sales_ratio."""
@@ -111,21 +81,18 @@ class Model(xr.Dataset):
         tp = self.attrs['t+']
         # Product of sales in the year before y_0 and the ratio of future
         # years' sales
-        a, b = xr.align(self['sales'],
-                        self['sales'].sel(t=self.attrs['t0'] - 1) *
+        x, _ = xr.align(self['sales'].sel(t=self.attrs['t0'] - 1) *
                         self['sales_ratio'].loc[:, tp],
-                        join='outer')
-        self['sales'] = a.fillna(0) + b.fillna(0)
+                        self['sales'], join='right')
+        self['sales'] += x.fillna(0)
 
     def _stock(self):
         """Compute vehicle stocks."""
-        # Vector of vehicle ages
-        # Survival function parameters
+        # Survival function
         age = self['age'].values[:, np.newaxis]
         B = self['B'].values
         T = self['T'].values
-        # Survival function
-        self['__s'] = (('age', 'class'), np.exp(-((age / T) ** B)))
+        self['__s'] = (('age', 'category'), np.exp(-((age / T) ** B)))
         # Copy sales into stock variable & compute survival
         for t in self.t.values:
             tp = self.t.where(self.t >= t).dropna('t')
@@ -153,6 +120,29 @@ class Model(xr.Dataset):
         """Compute VDT per vehicle."""
         pass
 
+    def xagg(self, var, shares):
+        dims = list(self[var].dims)
+        dims.remove('category')
+        ct = self.attrs['cat tree']
+        check = self[var].isnull().all(dims)
+        for c in check:
+            missing = c.item()
+            if not missing:
+                continue
+            cat = c.coords['category'].item()
+            children = ct.find(cat).children()
+            if len(children) and not check.loc[children].any():
+                # Can aggregate this category from its children
+                self[var].loc[dict(category=cat)] = \
+                    self[var].loc[dict(category=children)].sum('category')
+                continue
+            parent = ct.find(cat).parent()
+            if parent is not None and not check.loc[parent]:
+                # Can disaggregate this category from its parent
+                self[var].loc[dict(category=cat)] = \
+                    self[var].sel(category=parent) * \
+                    self[shares].sel(category=cat)
+
     def disaggregate(self, var, cat, shares):
         """Disaggregate data for a category.
 
@@ -162,9 +152,9 @@ class Model(xr.Dataset):
         the dimension of *var*.
         """
         x = self[var].loc[:, cat] * self[shares]
-        sub = x.coords['class'].where(np.any(np.isfinite(x.values), axis=0)) \
-               .dropna('class')
-        self[var].loc[:, sub] = x.sel(**{'class': sub})
+        sub = x.coords['category'] \
+               .where(np.any(np.isfinite(x.values), axis=0)).dropna('category')
+        self[var].loc[:, sub] = x.sel(category=sub)
 
     def aggregate(self, var, cat, how='sum', weights=None):
         """Aggregate data within a category.
@@ -174,8 +164,8 @@ class Model(xr.Dataset):
         """
         # TODO only tested for 'stock'; add argument checking
         assert how == 'sum' and weights is None
-        sub = subcategories(self.attrs['class tree'], cat)
-        self[var].loc[:, cat] = self[var].loc[:, sub].sum('class')
+        sub = self.attrs['cat tree'].find(cat).children()
+        self[var].loc[:, cat] = self[var].loc[:, sub].sum('category')
 
     def align(self, var, other):
         var = self[var]
@@ -216,3 +206,10 @@ class Model(xr.Dataset):
 
     def bfill(self, var, dim, stop=None):
         self.fill(var, dim, reverse=True, stop=stop)
+
+    def round(self, var):
+        self[var] = self[var].round()
+
+    def xfill(self, var, stop=None):
+        self.fill(var, 't', stop)
+        self.fill(var, 't', reverse=True)
