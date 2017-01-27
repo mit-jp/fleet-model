@@ -13,13 +13,14 @@ class MissingDataException(Exception):
     pass
 
 
-class Model(xr.Dataset):
-    """Fleet model class.
+@xr.register_dataset_accessor('fleet')
+class FleetAccessor(object):
+    def __init__(self, xarray_obj):
+        self._obj = xarray_obj
 
-    Inherits xray.Dataset, so that the data (variables, coords, attrs)
-    associated with the model may be accessed directly from instances.
-    """
-    def __init__(self, init_data):
+    def init(self):
+        ds = self._obj
+
         # Data arrays store vehicles classes *plus* categories
         cat_tree = Category('Total', default.categories)
         # atomic = cat_tree.leaves()
@@ -37,29 +38,51 @@ class Model(xr.Dataset):
             }
         coords['age'] = range(len(coords['t']) + 1)
 
+        ds = ds.assign_coords(**coords)
+
         # Variables
-        variables = {}
-        for v in filter(lambda x: not x.startswith('__'),
-                        vars(fleet.variables)):
-            attrs = getattr(fleet.variables, v)
-            dims = attrs.pop('dims')
-            variables[v] = (dims,
-                            np.nan * np.ones([len(coords[d]) for d in dims]),
-                            attrs)
+        for v, attrs in vars(fleet.variables).items():
+            if v.startswith('__'):
+                continue
+            dims = attrs['dims']
+            ds[v] = (dims,
+                     np.nan * np.ones([len(coords[d]) for d in dims]),
+                     attrs)
 
         # Attributes
         attrs = {
             'cat tree': cat_tree,
+            'freq': default.time['freq'],
             't0': pd.Period(default.time[0], freq=default.time['freq']),
             }
 
-        xr.Dataset.__init__(self, variables, coords, attrs=attrs)
+        ds.attrs.update(attrs)
 
         # Other attributes that could not be precomputed
-        self.attrs['t+'] = self.t.where(self.t >= self.attrs['t0']).dropna('t')
+        ds.attrs['t+'] = ds.t.where(ds.t >= ds.attrs['t0']).dropna('t')
 
-        # Initialize data
-        init_data(self)
+        self._obj = ds
+
+    def load(self, var, filename):
+        df = pd.read_csv(filename, delimiter='\t', index_col=0, na_values='.',
+                         comment='#')
+        da = xr.DataArray(df, dims=self._obj[var].attrs['dims'])
+        for dim in da.coords:
+            if dim in 't':
+                da.coords[dim] = pd.PeriodIndex(da.coords[dim],
+                                                freq=self._obj.attrs['freq'])
+        aligned = xr.align(self._obj, da)
+        self._obj[var] = aligned
+
+
+class Model(xr.Dataset):
+    """Fleet model class.
+
+    Inherits xray.Dataset, so that the data (variables, coords, attrs)
+    associated with the model may be accessed directly from instances.
+    """
+    def __init__(self, init_data):
+        pass
 
     def compute(self, var):
         """Compute the contents of *var*."""

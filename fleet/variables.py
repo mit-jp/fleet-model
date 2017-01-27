@@ -1,5 +1,10 @@
 # Variables for the fleet model.
 
+__all__ = [
+    'sales_growth',
+    ]
+
+
 sales = {
     'dims': ['category', 't'],
     'description': 'Number of vehicles sold',
