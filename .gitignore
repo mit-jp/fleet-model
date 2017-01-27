@@ -1,4 +1,5 @@
 *.pyc
 *.xlsx
+**/.cache
 __pycache__
 examples/check
